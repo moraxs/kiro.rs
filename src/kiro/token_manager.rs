@@ -697,9 +697,12 @@ impl MultiTokenManager {
     fn select_next_credential(&self, model: Option<&str>) -> Option<(u64, KiroCredentials)> {
         let entries = self.entries.lock();
 
-        // 检查是否是 opus 模型
-        let is_opus = model
-            .map(|m| m.to_lowercase().contains("opus"))
+        // 检查是否是仅付费订阅可用的模型（Opus / GPT 系列）
+        let is_paid_only = model
+            .map(|m| {
+                let m = m.to_lowercase();
+                m.contains("opus") || m.contains("gpt-")
+            })
             .unwrap_or(false);
 
         // 过滤可用凭据
@@ -709,8 +712,8 @@ impl MultiTokenManager {
                 if e.disabled {
                     return false;
                 }
-                // 如果是 opus 模型，需要检查订阅等级
-                if is_opus && !e.credentials.supports_opus() {
+                // 如果是仅付费模型，需要检查订阅等级
+                if is_paid_only && !e.credentials.supports_opus() {
                     return false;
                 }
                 true

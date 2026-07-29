@@ -446,6 +446,11 @@ RUST_LOG=debug ./target/release/kiro-rs
 | `*opus*`（含 4.6/4-6） | `claude-opus-4.6` |
 | `*opus*`（含 4.5/4-5） | `claude-opus-4.5` |
 | `*haiku*` | `claude-haiku-4.5` |
+| `*gpt-5.6*sol*` | `gpt-5.6-sol` |
+| `*gpt-5.6*terra*` | `gpt-5.6-terra` |
+| `*gpt-5.6*luna*` | `gpt-5.6-luna` |
+
+GPT-5.6 系列上下文窗口为 272K，且与 Opus 一样需要付费订阅（Free 账号不可用）。
 
 Sonnet 5 的 thinking 行为与已知限制见 [docs/claude-sonnet-5.md](docs/claude-sonnet-5.md)。
 

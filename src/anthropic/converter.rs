@@ -106,6 +106,16 @@ pub fn map_model(model: &str) -> Option<String> {
         }
     } else if model_lower.contains("haiku") {
         Some("claude-haiku-4.5".to_string())
+    } else if model_lower.contains("gpt-5.6") || model_lower.contains("gpt-5-6") {
+        if model_lower.contains("sol") {
+            Some("gpt-5.6-sol".to_string())
+        } else if model_lower.contains("terra") {
+            Some("gpt-5.6-terra".to_string())
+        } else if model_lower.contains("luna") {
+            Some("gpt-5.6-luna".to_string())
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -116,8 +126,10 @@ pub fn map_model(model: &str) -> Option<String> {
 /// 复用 `map_model` 的映射逻辑，确保窗口大小判断与模型映射一致。
 /// Kiro 于 2026-03-24 将 Opus 4.6 和 Sonnet 4.6 升级至 1M 上下文。
 /// Sonnet 5 / Opus 4.7 / 4.8 / Opus 5 同 1M
+/// GPT-5.6 系列为 272K
 pub fn get_context_window_size(model: &str) -> i32 {
     match map_model(model) {
+        Some(mapped) if mapped.starts_with("gpt-5.6") => 272_000,
         Some(mapped) if mapped == "claude-sonnet-5" || mapped == "claude-opus-5" || mapped == "claude-sonnet-4.6" || mapped == "claude-opus-4.6" || mapped == "claude-opus-4.7" || mapped == "claude-opus-4.8" => 1_000_000,
         _ => 200_000,
     }
@@ -937,6 +949,15 @@ mod tests {
     #[test]
     fn test_map_model_unsupported() {
         assert!(map_model("gpt-4").is_none());
+        assert!(map_model("gpt-5.6").is_none());
+    }
+
+    #[test]
+    fn test_map_model_gpt_5_6() {
+        assert_eq!(map_model("gpt-5.6-sol"), Some("gpt-5.6-sol".to_string()));
+        assert_eq!(map_model("gpt-5-6-terra"), Some("gpt-5.6-terra".to_string()));
+        assert_eq!(map_model("GPT-5.6-Luna"), Some("gpt-5.6-luna".to_string()));
+        assert_eq!(get_context_window_size("gpt-5.6-sol"), 272_000);
     }
 
     #[test]
