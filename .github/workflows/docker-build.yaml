@@ -44,7 +44,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     outputs:
       version: ${{ steps.version.outputs.version }}
-      alias_tag: ${{ steps.version.outputs.alias_tag }}
+      alias_tags: ${{ steps.version.outputs.alias_tags }}
 
     strategy:
       fail-fast: false
@@ -69,16 +69,19 @@ jobs:
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "alias_tag=latest" >> $GITHUB_OUTPUT
+            echo "alias_tags=latest" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "alias_tag=latest" >> $GITHUB_OUTPUT
+            echo "alias_tags=latest" >> $GITHUB_OUTPUT
           elif [ "${{ github.ref_name }}" = "master" ]; then
             echo "version=beta-${SHORT_SHA}" >> $GITHUB_OUTPUT
-            echo "alias_tag=beta" >> $GITHUB_OUTPUT
+            echo "alias_tags=beta" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref_name }}" = "codex/opus-5-support" ]; then
+            echo "version=${BRANCH_SLUG}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+            echo "alias_tags=${BRANCH_SLUG} latest" >> $GITHUB_OUTPUT
           else
             echo "version=${BRANCH_SLUG}-${SHORT_SHA}" >> $GITHUB_OUTPUT
-            echo "alias_tag=${BRANCH_SLUG}" >> $GITHUB_OUTPUT
+            echo "alias_tags=${BRANCH_SLUG}" >> $GITHUB_OUTPUT
           fi
 
       - name: Set up Docker Buildx
@@ -119,7 +122,7 @@ jobs:
       - name: Create and push multi-arch manifest
         run: |
           VERSION="${{ needs.build.outputs.version }}"
-          ALIAS_TAG="${{ needs.build.outputs.alias_tag }}"
+          ALIAS_TAGS="${{ needs.build.outputs.alias_tags }}"
           IMAGE="ghcr.io/${{ github.repository_owner }}/kiro-rs"
 
           # Create manifest for version tag
@@ -128,8 +131,10 @@ jobs:
             ${IMAGE}:${VERSION}-arm64
           docker manifest push ${IMAGE}:${VERSION}
 
-          # Create manifest for alias tag (latest / beta / branch slug)
-          docker manifest create ${IMAGE}:${ALIAS_TAG} \
-            ${IMAGE}:${VERSION}-amd64 \
-            ${IMAGE}:${VERSION}-arm64
-          docker manifest push ${IMAGE}:${ALIAS_TAG}
+          # Create manifests for alias tags (latest / beta / branch slug)
+          for ALIAS_TAG in ${ALIAS_TAGS}; do
+            docker manifest create ${IMAGE}:${ALIAS_TAG} \
+              ${IMAGE}:${VERSION}-amd64 \
+              ${IMAGE}:${VERSION}-arm64
+            docker manifest push ${IMAGE}:${ALIAS_TAG}
+          done
