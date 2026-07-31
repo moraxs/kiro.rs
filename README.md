@@ -66,10 +66,10 @@
 
 ### Docker
 
-推荐生产部署使用 Docker。仓库提供的 `docker-compose.yml` 默认使用 Docker Hub 镜像：
+推荐生产部署使用 Docker。仓库提供的 `docker-compose.yml` 默认使用 GitHub Container Registry 镜像：
 
 ```yaml
-image: ${KIRO_RS_IMAGE:-zyphrzero/kiro-rs:latest}
+image: ${KIRO_RS_IMAGE:-ghcr.io/moraxs/kiro-rs:latest}
 ports:
   - "8990:8990"
 volumes:
