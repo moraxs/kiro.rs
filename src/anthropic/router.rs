@@ -1,5 +1,7 @@
 //! Anthropic API 路由配置
 
+use std::sync::Arc;
+
 use axum::{
     Router,
     extract::DefaultBodyLimit,
@@ -7,48 +9,95 @@ use axum::{
     routing::{get, post},
 };
 
+use crate::admin::client_keys::SharedClientKeyManager;
+use crate::admin::trace_db::SharedTraceStore;
+use crate::admin::usage_stats::{SharedAggregator, SharedRecorder};
 use crate::kiro::provider::KiroProvider;
+use crate::model::config::ToolCompatibilityMode;
 
 use super::{
+    cache_metering::SharedCacheMeter,
     handlers::{count_tokens, get_models, post_messages, post_messages_cc},
     middleware::{AppState, auth_middleware, cors_layer},
+    openai::post_chat_completions,
+    responses::post_responses,
 };
 
 /// 请求体最大大小限制 (50MB)
 const MAX_BODY_SIZE: usize = 50 * 1024 * 1024;
 
-/// 创建 Anthropic API 路由
-///
-/// # 端点
-/// - `GET /v1/models` - 获取可用模型列表
-/// - `POST /v1/messages` - 创建消息（对话）
-/// - `POST /v1/messages/count_tokens` - 计算 token 数量
-///
-/// # 认证
-/// 所有 `/v1` 路径需要 API Key 认证，支持：
-/// - `x-api-key` header
-/// - `Authorization: Bearer <token>` header
-///
-/// # 参数
-/// - `api_key`: API 密钥，用于验证客户端请求
-/// - `kiro_provider`: 可选的 KiroProvider，用于调用上游 API
-
 /// 创建带有 KiroProvider 的 Anthropic API 路由
+///
+/// 给嵌入到其他 Rust 项目的下游使用者预留的扩展点。
+#[allow(dead_code)]
 pub fn create_router_with_provider(
-    api_key: impl Into<String>,
     kiro_provider: Option<KiroProvider>,
     extract_thinking: bool,
+    tool_compatibility_mode: ToolCompatibilityMode,
 ) -> Router {
-    let mut state = AppState::new(api_key, extract_thinking);
+    create_router(
+        kiro_provider,
+        extract_thinking,
+        tool_compatibility_mode,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+/// 创建 Anthropic API 路由（供 main.rs 使用）
+#[allow(clippy::too_many_arguments)]
+pub fn create_router(
+    kiro_provider: Option<KiroProvider>,
+    extract_thinking: bool,
+    tool_compatibility_mode: ToolCompatibilityMode,
+    client_keys: Option<SharedClientKeyManager>,
+    usage_recorder: Option<SharedRecorder>,
+    usage_aggregator: Option<SharedAggregator>,
+    cache_meter: Option<SharedCacheMeter>,
+    trace_store: Option<SharedTraceStore>,
+) -> Router {
+    create_router_with_shared_provider(
+        kiro_provider.map(Arc::new),
+        extract_thinking,
+        tool_compatibility_mode,
+        client_keys,
+        usage_recorder,
+        usage_aggregator,
+        cache_meter,
+        trace_store,
+    )
+}
+
+/// 创建共享 KiroProvider 的路由，供主程序同时挂载 API 与 Admin 控制面。
+#[allow(clippy::too_many_arguments)]
+pub fn create_router_with_shared_provider(
+    kiro_provider: Option<Arc<KiroProvider>>,
+    extract_thinking: bool,
+    tool_compatibility_mode: ToolCompatibilityMode,
+    client_keys: Option<SharedClientKeyManager>,
+    usage_recorder: Option<SharedRecorder>,
+    usage_aggregator: Option<SharedAggregator>,
+    cache_meter: Option<SharedCacheMeter>,
+    trace_store: Option<SharedTraceStore>,
+) -> Router {
+    let mut state = AppState::new(extract_thinking, tool_compatibility_mode);
     if let Some(provider) = kiro_provider {
-        state = state.with_kiro_provider(provider);
+        state = state.with_shared_kiro_provider(provider);
     }
+    state = state.with_usage(client_keys, usage_recorder, usage_aggregator);
+    state = state.with_cache_meter(cache_meter);
+    state = state.with_trace_store(trace_store);
 
     // 需要认证的 /v1 路由
     let v1_routes = Router::new()
         .route("/models", get(get_models))
         .route("/messages", post(post_messages))
         .route("/messages/count_tokens", post(count_tokens))
+        .route("/chat/completions", post(post_chat_completions))
+        .route("/responses", post(post_responses))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

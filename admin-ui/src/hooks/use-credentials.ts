@@ -5,13 +5,37 @@ import {
   setCredentialPriority,
   resetCredentialFailure,
   forceRefreshToken,
+  clearThrottle,
   getCredentialBalance,
+  getCredentialModels,
+  getCurrentCredentialModels,
+  testModel,
   addCredential,
   deleteCredential,
+  updateCredential,
+  updateRefreshToken,
   getLoadBalancingMode,
   setLoadBalancingMode,
+  getAccountThrottleConfig,
+  setAccountThrottleConfig,
+  getSelfHealConfig,
+  setSelfHealConfig,
+  getLogGovernanceConfig,
+  setLogGovernanceConfig,
+  getGlobalProxy,
+  setGlobalProxy,
+  getUpdateConfig,
+  setUpdateConfig,
+  resetSuccessCount,
+  resetAllSuccessCount,
 } from '@/api/credentials'
-import type { AddCredentialRequest } from '@/types/api'
+import type {
+  AddCredentialRequest,
+  SetGlobalProxyRequest,
+  SetUpdateConfigRequest,
+  UpdateCredentialRequest,
+  UpdateRefreshTokenRequest,
+} from '@/types/api'
 
 // 查询凭据列表
 export function useCredentials() {
@@ -29,6 +53,33 @@ export function useCredentialBalance(id: number | null) {
     queryFn: () => getCredentialBalance(id!),
     enabled: id !== null,
     retry: false, // 余额查询失败时不重试（避免重复请求被封禁的账号）
+  })
+}
+
+// 查询凭据当前可用的模型列表（按需实时查询上游）
+export function useCredentialModels(id: number | null) {
+  return useQuery({
+    queryKey: ['credential-models', id],
+    queryFn: () => getCredentialModels(id!),
+    enabled: id !== null,
+    retry: false, // 失败不重试，避免对被封禁/异常账号反复请求
+  })
+}
+
+// 使用账号池当前选中的可用凭据查询模型列表
+export function useCurrentCredentialModels(enabled: boolean) {
+  return useQuery({
+    queryKey: ['current-credential-models'],
+    queryFn: getCurrentCredentialModels,
+    enabled,
+    retry: false,
+  })
+}
+
+// 对模型发送真实请求
+export function useTestModel() {
+  return useMutation({
+    mutationFn: testModel,
   })
 }
 
@@ -78,6 +129,17 @@ export function useForceRefreshToken() {
   })
 }
 
+// 解除账号级风控冷却
+export function useClearThrottle() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => clearThrottle(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
 // 添加新凭据
 export function useAddCredential() {
   const queryClient = useQueryClient()
@@ -100,6 +162,52 @@ export function useDeleteCredential() {
   })
 }
 
+// 重置单个凭据的成功次数
+export function useResetSuccessCount() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => resetSuccessCount(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
+// 重置所有凭据的成功次数
+export function useResetAllSuccessCount() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => resetAllSuccessCount(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
+// 更新已禁用凭据的 refreshToken
+export function useUpdateRefreshToken() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, req }: { id: number; req: UpdateRefreshTokenRequest }) =>
+      updateRefreshToken(id, req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
+// 更新凭据可编辑字段
+export function useUpdateCredential() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, req }: { id: number; req: UpdateCredentialRequest }) =>
+      updateCredential(id, req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
 // 获取负载均衡模式
 export function useLoadBalancingMode() {
   return useQuery({
@@ -115,6 +223,103 @@ export function useSetLoadBalancingMode() {
     mutationFn: setLoadBalancingMode,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['loadBalancingMode'] })
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      queryClient.invalidateQueries({ queryKey: ['current-credential-models'] })
+    },
+  })
+}
+
+// 获取账号级风控故障转移配置
+export function useAccountThrottleConfig() {
+  return useQuery({
+    queryKey: ['accountThrottleConfig'],
+    queryFn: getAccountThrottleConfig,
+  })
+}
+
+// 更新账号级风控故障转移配置
+export function useSetAccountThrottleConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: setAccountThrottleConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['accountThrottleConfig'] })
+    },
+  })
+}
+
+// 获取自愈治理配置（30s 刷新以便观测 consecutiveRounds/totalCount 变化）
+export function useSelfHealConfig() {
+  return useQuery({
+    queryKey: ['selfHealConfig'],
+    queryFn: getSelfHealConfig,
+    refetchInterval: 30_000,
+  })
+}
+
+// 更新自愈治理配置
+export function useSetSelfHealConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: setSelfHealConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['selfHealConfig'] })
+    },
+  })
+}
+
+// 获取日志治理配置
+export function useLogGovernanceConfig() {
+  return useQuery({
+    queryKey: ['logGovernanceConfig'],
+    queryFn: getLogGovernanceConfig,
+  })
+}
+
+// 更新日志治理配置
+export function useSetLogGovernanceConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: setLogGovernanceConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['logGovernanceConfig'] })
+    },
+  })
+}
+
+// 全局出站代理。此前只在代理池弹窗里内联查询，设置页需要独立入口，
+// 抽成 hook 后两处共用同一份缓存（queryKey 与弹窗保持一致：'global-proxy'）。
+export function useGlobalProxy() {
+  return useQuery({
+    queryKey: ['global-proxy'],
+    queryFn: getGlobalProxy,
+  })
+}
+
+export function useSetGlobalProxy() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: SetGlobalProxyRequest) => setGlobalProxy(req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['global-proxy'] })
+    },
+  })
+}
+
+// 镜像在线更新配置（GitHub Token / 无人值守自动更新）
+export function useUpdateConfig() {
+  return useQuery({
+    queryKey: ['update-config'],
+    queryFn: getUpdateConfig,
+  })
+}
+
+export function useSetUpdateConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: SetUpdateConfigRequest) => setUpdateConfig(req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['update-config'] })
     },
   })
 }

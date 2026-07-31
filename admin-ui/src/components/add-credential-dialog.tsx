@@ -9,15 +9,24 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select'
 import { useAddCredential } from '@/hooks/use-credentials'
+import { useGroupOptions } from '@/hooks/use-groups'
 import { extractErrorMessage } from '@/lib/utils'
+import { GroupMultiSelect } from '@/components/group-select'
 
 interface AddCredentialDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-type AuthMethod = 'social' | 'idc' | 'api_key'
+type AuthMethod = 'social' | 'idc' | 'api_key' | 'external_idp'
 
 export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogProps) {
   const [refreshToken, setRefreshToken] = useState('')
@@ -27,12 +36,18 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
   const [apiRegion, setApiRegion] = useState('')
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
-  const [priority, setPriority] = useState('0')
+  const [tokenEndpoint, setTokenEndpoint] = useState('')
+  const [issuerUrl, setIssuerUrl] = useState('')
+  const [scopes, setScopes] = useState('')
   const [machineId, setMachineId] = useState('')
   const [proxyUrl, setProxyUrl] = useState('')
   const [proxyUsername, setProxyUsername] = useState('')
   const [proxyPassword, setProxyPassword] = useState('')
   const [endpoint, setEndpoint] = useState('')
+  const [groups, setGroups] = useState<string[]>([])
+  const [sourceChannel, setSourceChannel] = useState('')
+
+  const groupOptions = useGroupOptions()
 
   const { mutate, isPending } = useAddCredential()
 
@@ -44,15 +59,20 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
     setApiRegion('')
     setClientId('')
     setClientSecret('')
-    setPriority('0')
+    setTokenEndpoint('')
+    setIssuerUrl('')
+    setScopes('')
     setMachineId('')
     setProxyUrl('')
     setProxyUsername('')
     setProxyPassword('')
     setEndpoint('')
+    setGroups([])
+    setSourceChannel('')
   }
 
   const isApiKey = authMethod === 'api_key'
+  const isExternalIdp = authMethod === 'external_idp'
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -73,23 +93,33 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
         toast.error('IdC/Builder-ID/IAM 认证需要填写 Client ID 和 Client Secret')
         return
       }
+      // 企业 SSO 需要 Client ID + Token 端点
+      if (isExternalIdp && (!clientId.trim() || !tokenEndpoint.trim())) {
+        toast.error('企业 SSO (external_idp) 需要填写 Client ID 和 Token 端点')
+        return
+      }
     }
 
     mutate(
       {
         authMethod,
+        provider: isExternalIdp ? 'AzureAD' : undefined,
         refreshToken: isApiKey ? undefined : refreshToken.trim(),
         kiroApiKey: isApiKey ? kiroApiKey.trim() : undefined,
         authRegion: authRegion.trim() || undefined,
         apiRegion: apiRegion.trim() || undefined,
         clientId: isApiKey ? undefined : clientId.trim() || undefined,
-        clientSecret: isApiKey ? undefined : clientSecret.trim() || undefined,
-        priority: parseInt(priority) || 0,
+        clientSecret: isApiKey || isExternalIdp ? undefined : clientSecret.trim() || undefined,
+        tokenEndpoint: isExternalIdp ? tokenEndpoint.trim() || undefined : undefined,
+        issuerUrl: isExternalIdp ? issuerUrl.trim() || undefined : undefined,
+        scopes: isExternalIdp ? scopes.trim() || undefined : undefined,
         machineId: machineId.trim() || undefined,
         proxyUrl: proxyUrl.trim() || undefined,
         proxyUsername: proxyUsername.trim() || undefined,
         proxyPassword: proxyPassword.trim() || undefined,
         endpoint: endpoint.trim() || undefined,
+        groups: groups,
+        sourceChannel: sourceChannel.trim() || undefined,
       },
       {
         onSuccess: (data) => {
@@ -118,17 +148,21 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
               <label htmlFor="authMethod" className="text-sm font-medium">
                 认证方式
               </label>
-              <select
-                id="authMethod"
+              <Select
                 value={authMethod}
-                onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
+                onValueChange={(v) => setAuthMethod(v as AuthMethod)}
                 disabled={isPending}
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <option value="social">Social</option>
-                <option value="idc">IdC/Builder-ID/IAM</option>
-                <option value="api_key">API Key</option>
-              </select>
+                <SelectTrigger id="authMethod" className="h-10 rounded-xl px-3.5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="social">Social</SelectItem>
+                  <SelectItem value="idc">IdC/Builder-ID/IAM</SelectItem>
+                  <SelectItem value="external_idp">企业 SSO (Microsoft Entra / Azure AD)</SelectItem>
+                  <SelectItem value="api_key">API Key</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Kiro API Key (API Key 模式) */}
@@ -224,24 +258,62 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
               </>
             )}
 
-            {/* 优先级 */}
-            <div className="space-y-2">
-              <label htmlFor="priority" className="text-sm font-medium">
-                优先级
-              </label>
-              <Input
-                id="priority"
-                type="number"
-                min="0"
-                placeholder="数字越小优先级越高"
-                value={priority}
-                onChange={(e) => setPriority(e.target.value)}
-                disabled={isPending}
-              />
-              <p className="text-xs text-muted-foreground">
-                数字越小优先级越高，默认为 0
-              </p>
-            </div>
+            {/* 企业 SSO (external_idp) 额外字段 */}
+            {isExternalIdp && (
+              <>
+                <div className="space-y-2">
+                  <label htmlFor="extClientId" className="text-sm font-medium">
+                    Client ID <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    id="extClientId"
+                    placeholder="IdP 应用（public client）的 Client ID"
+                    value={clientId}
+                    onChange={(e) => setClientId(e.target.value)}
+                    disabled={isPending}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="tokenEndpoint" className="text-sm font-medium">
+                    Token 端点 <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    id="tokenEndpoint"
+                    placeholder="https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token"
+                    value={tokenEndpoint}
+                    onChange={(e) => setTokenEndpoint(e.target.value)}
+                    disabled={isPending}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    仅允许 *.microsoftonline.com / .us / .cn 主机（https）
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="issuerUrl" className="text-sm font-medium">
+                    Issuer URL
+                  </label>
+                  <Input
+                    id="issuerUrl"
+                    placeholder="https://login.microsoftonline.com/<tenant>/v2.0（可选）"
+                    value={issuerUrl}
+                    onChange={(e) => setIssuerUrl(e.target.value)}
+                    disabled={isPending}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="scopes" className="text-sm font-medium">
+                    Scopes
+                  </label>
+                  <Input
+                    id="scopes"
+                    placeholder="空格分隔，需含 offline_access（可选）"
+                    value={scopes}
+                    onChange={(e) => setScopes(e.target.value)}
+                    disabled={isPending}
+                  />
+                </div>
+              </>
+            )}
 
             {/* Machine ID */}
             <div className="space-y-2">
@@ -274,6 +346,37 @@ export function AddCredentialDialog({ open, onOpenChange }: AddCredentialDialogP
               />
               <p className="text-xs text-muted-foreground">
                 可选。决定该凭据走哪套 Kiro API。留空使用全局 defaultEndpoint
+              </p>
+            </div>
+
+            {/* 账号分组 */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">账号分组</label>
+              <GroupMultiSelect
+                value={groups}
+                options={groupOptions}
+                onChange={setGroups}
+                disabled={isPending}
+              />
+              <p className="text-xs text-muted-foreground">
+                可选。绑定了某分组的客户端 Key 只会调度到含该分组的账号
+              </p>
+            </div>
+
+            {/* 账号来源渠道 */}
+            <div className="space-y-2">
+              <label htmlFor="sourceChannel" className="text-sm font-medium">
+                账号来源渠道（备注）
+              </label>
+              <Input
+                id="sourceChannel"
+                placeholder="例: 官方, 转售商A, 采购平台X"
+                value={sourceChannel}
+                onChange={(e) => setSourceChannel(e.target.value)}
+                disabled={isPending}
+              />
+              <p className="text-xs text-muted-foreground">
+                可选。纯备注，标记账号来源/渠道，便于追踪
               </p>
             </div>
 

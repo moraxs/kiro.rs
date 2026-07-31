@@ -1,51 +1,66 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Apple light theme — macOS Sonoma inspired */
+    --background: 220 20% 97%;
+    --foreground: 220 10% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 220 10% 12%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-    --radius: 0.5rem;
+    --popover-foreground: 220 10% 12%;
+    /* Apple system blue (#007AFF) */
+    --primary: 211 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 220 10% 12%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 8% 45%;
+    --accent: 211 100% 96%;
+    --accent-foreground: 211 100% 35%;
+    /* Apple system red (#FF3B30) */
+    --destructive: 4 100% 59%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 88%;
+    --input: 220 13% 88%;
+    --ring: 211 100% 50%;
+    --radius: 0.875rem;
+
+    /* 状态色轨 —— 三个页面共用的一套异常语言。
+       amber 与 orange 分开是有信息量的：冷却会自己恢复，超额不会。 */
+    --rail-ok: 160 84% 39%;
+    --rail-warn: 38 92% 50%;
+    --rail-cool: 25 95% 53%;
+    --rail-dead: 4 100% 59%;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    /* Apple dark theme — macOS Sonoma inspired */
+    --background: 220 14% 8%;
+    --foreground: 220 10% 96%;
+    --card: 220 14% 12%;
+    --card-foreground: 220 10% 96%;
+    --popover: 220 14% 12%;
+    --popover-foreground: 220 10% 96%;
+    --primary: 211 100% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 18%;
+    --secondary-foreground: 220 10% 96%;
+    --muted: 220 14% 16%;
+    --muted-foreground: 220 8% 62%;
+    --accent: 211 70% 22%;
+    --accent-foreground: 211 100% 80%;
+    --destructive: 4 90% 62%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 14% 22%;
+    --input: 220 14% 22%;
+    --ring: 211 100% 60%;
+
+    --rail-ok: 160 84% 45%;
+    --rail-warn: 38 92% 55%;
+    --rail-cool: 25 95% 58%;
+    --rail-dead: 4 90% 62%;
   }
 }
 
@@ -53,8 +68,257 @@
   * {
     @apply border-border;
   }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
   body {
     @apply bg-background text-foreground;
-    font-feature-settings: "rlig" 1, "calt" 1;
+    font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont,
+      "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui,
+      sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
+    letter-spacing: 0;
+  }
+  label:not(.flex):not(.inline-flex) {
+    display: block;
+  }
+  /* Subtle ambient gradient background, macOS-style */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(60rem 40rem at 10% -10%, hsl(211 100% 60% / 0.08), transparent 60%),
+      radial-gradient(50rem 30rem at 110% 0%, hsl(280 90% 60% / 0.06), transparent 60%),
+      radial-gradient(40rem 30rem at 50% 110%, hsl(180 80% 50% / 0.05), transparent 60%);
+  }
+  .dark body::before {
+    background:
+      radial-gradient(60rem 40rem at 10% -10%, hsl(211 100% 50% / 0.16), transparent 60%),
+      radial-gradient(50rem 30rem at 110% 0%, hsl(280 90% 55% / 0.12), transparent 60%),
+      radial-gradient(40rem 30rem at 50% 110%, hsl(180 80% 50% / 0.08), transparent 60%);
+  }
+}
+
+@layer base {
+  /* Apple-style scrollbar */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.25);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.45);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+}
+
+@layer components {
+  /* Frosted glass surface — like macOS toolbar */
+  .glass {
+    @apply bg-background/70 backdrop-blur-xl backdrop-saturate-150;
+    box-shadow: inset 0 -1px 0 0 hsl(var(--border) / 0.6);
+  }
+  .glass-card {
+    @apply bg-card/80 backdrop-blur-2xl backdrop-saturate-150 border border-border/60;
+  }
+  /* Soft, layered Apple-style elevation */
+  .shadow-apple-sm {
+    box-shadow: 0 1px 2px hsl(220 10% 10% / 0.04), 0 1px 1px hsl(220 10% 10% / 0.03);
+  }
+  .shadow-apple {
+    box-shadow: 0 1px 2px hsl(220 10% 10% / 0.05), 0 8px 24px -12px hsl(220 10% 10% / 0.12);
+  }
+  .shadow-apple-lg {
+    box-shadow: 0 1px 2px hsl(220 10% 10% / 0.05), 0 20px 50px -20px hsl(220 10% 10% / 0.25);
+  }
+  .hairline {
+    box-shadow: inset 0 -1px 0 0 hsl(var(--border) / 0.7);
+  }
+
+  /* 可用模型铭牌逐行入场：与图表同一条 Apple 缓动曲线 */
+  .spec-row-in {
+    animation: spec-row-in 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  @keyframes spec-row-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spec-row-in {
+      animation: none;
+    }
+  }
+
+  /* 趋势图 range 切换时的开屏动画：fade + slight slide-up */
+  .chart-range-fade {
+    animation: chart-range-fade 280ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  @keyframes chart-range-fade {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chart-range-fade {
+      animation: none;
+    }
+  }
+}
+
+/* ============================================================
+   Console 密度层
+   ------------------------------------------------------------
+   卡片是"看"的（rounded-2xl / h-10 / 舒适间距），表格是"做"的。
+   两种密度并存，不互相覆盖：本层只作用于 .console-* 作用域内，
+   避免与现有组件的 padding / radius 打架。
+   ============================================================ */
+@layer components {
+  .console-scope {
+    /* 数据列专用字族：ID / token / credit / 耗时 / 时间戳 靠它纵向对齐。
+       运维表格能否快速扫读，前提就是数字对齐。 */
+    --font-console: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo",
+      "Cascadia Mono", monospace;
+  }
+
+  /* 数值 / 标识符单元格 */
+  .console-num {
+    font-family: var(--font-console);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  /* 密集表格骨架 */
+  .console-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    text-align: left;
+    font-size: 12.5px;
+    line-height: 1.35;
+  }
+  .console-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    height: 30px;
+    padding: 0 10px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--card));
+    box-shadow: inset 0 -1px 0 0 hsl(var(--border) / 0.8);
+    white-space: nowrap;
+  }
+  .console-table tbody td {
+    height: 34px;
+    padding: 0 10px;
+    box-shadow: inset 0 -1px 0 0 hsl(var(--border) / 0.4);
+    white-space: nowrap;
+  }
+  .console-table tbody tr:hover td {
+    background: hsl(var(--accent) / 0.45);
+  }
+  /* 键盘游标行（j/k 导航）—— 比 hover 更实心，两者可叠加 */
+  .console-table tbody tr[data-cursor="true"] td {
+    background: hsl(var(--accent) / 0.75);
+  }
+  .console-table tbody tr[data-selected="true"] td {
+    background: hsl(var(--primary) / 0.09);
+  }
+  .console-table tbody tr[data-selected="true"]:hover td {
+    background: hsl(var(--primary) / 0.14);
+  }
+
+  /* 3px 左侧状态色轨：异常在三个页面里都是同一个信号 */
+  .console-rail {
+    box-shadow: inset 3px 0 0 0 var(--rail, transparent);
+  }
+  .rail-ok {
+    --rail: hsl(var(--rail-ok));
+  }
+  .rail-warn {
+    --rail: hsl(var(--rail-warn));
+  }
+  .rail-cool {
+    --rail: hsl(var(--rail-cool));
+  }
+  .rail-dead {
+    --rail: hsl(var(--rail-dead));
+  }
+
+  /* 行内操作：静默时不占视觉，hover / 焦点内才显形。
+     用 opacity 而非 display，避免 hover 时列宽跳动。 */
+  .console-row-actions {
+    opacity: 0;
+    transition: opacity 120ms ease-out;
+  }
+  tr:hover .console-row-actions,
+  tr:focus-within .console-row-actions,
+  tr[data-cursor="true"] .console-row-actions {
+    opacity: 1;
+  }
+
+  /* 吸底批量栏 */
+  .console-bulkbar {
+    animation: console-bulkbar-in 200ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  @keyframes console-bulkbar-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* 右侧抽屉 */
+  .console-drawer {
+    animation: console-drawer-in 240ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  @keyframes console-drawer-in {
+    from {
+      transform: translateX(16px);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .console-bulkbar,
+    .console-drawer {
+      animation: none;
+    }
   }
 }

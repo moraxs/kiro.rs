@@ -1,7 +1,7 @@
 //! Anthropic API 类型定义
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 // === 错误响应 ===
 
@@ -39,7 +39,7 @@ impl ErrorResponse {
 // === Models 端点类型 ===
 
 /// 模型信息
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Model {
     pub id: String,
     pub object: String,
@@ -116,6 +116,7 @@ pub struct Metadata {
 #[allow(dead_code)]
 pub struct MessagesRequest {
     pub model: String,
+    #[serde(default = "default_max_tokens")]
     pub max_tokens: i32,
     pub messages: Vec<Message>,
     #[serde(default)]
@@ -128,6 +129,10 @@ pub struct MessagesRequest {
     pub output_config: Option<OutputConfig>,
     /// Claude Code 请求中的 metadata，包含 session 信息
     pub metadata: Option<Metadata>,
+}
+
+fn default_max_tokens() -> i32 {
+    32_000
 }
 
 /// 反序列化 system 字段，支持字符串或数组格式
@@ -151,6 +156,7 @@ where
         {
             Ok(Some(vec![SystemMessage {
                 text: value.to_string(),
+                cache_control: None,
             }]))
         }
 
@@ -199,6 +205,19 @@ pub struct Message {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SystemMessage {
     pub text: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
+}
+
+/// cache_control 配置
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CacheControl {
+    #[serde(rename = "type")]
+    pub cache_type: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>,
 }
 
 /// 工具定义
@@ -218,11 +237,18 @@ pub struct Tool {
     #[serde(default)]
     pub description: String,
     /// 输入参数 schema（普通工具必需，WebSearch 工具无此字段）
+    ///
+    /// 使用 `BTreeMap` 而非 `HashMap`：key 按字典序稳定迭代，保证序列化
+    /// 输出可复现。这对 prompt cache 至关重要——tool 签名参与缓存前缀
+    /// 指纹，若顶层 key 顺序抖动会导致后续 system/messages 断点连锁失效。
     #[serde(default)]
-    pub input_schema: HashMap<String, serde_json::Value>,
+    pub input_schema: BTreeMap<String, serde_json::Value>,
     /// 最大使用次数（仅 WebSearch 工具）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_uses: Option<i32>,
+    /// 缓存控制
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
 }
 
 /// 内容块
@@ -248,6 +274,8 @@ pub struct ContentBlock {
     pub is_error: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<ImageSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
 }
 
 /// 图片数据源
@@ -280,4 +308,32 @@ pub struct CountTokensRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CountTokensResponse {
     pub input_tokens: i32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MessagesRequest;
+
+    fn request_json(max_tokens: Option<i32>) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "model": "claude-sonnet-4.6",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        if let Some(max_tokens) = max_tokens {
+            value["max_tokens"] = serde_json::json!(max_tokens);
+        }
+        value
+    }
+
+    #[test]
+    fn messages_request_defaults_missing_max_tokens() {
+        let request: MessagesRequest = serde_json::from_value(request_json(None)).unwrap();
+        assert_eq!(request.max_tokens, 32_000);
+    }
+
+    #[test]
+    fn messages_request_preserves_explicit_max_tokens() {
+        let request: MessagesRequest = serde_json::from_value(request_json(Some(4096))).unwrap();
+        assert_eq!(request.max_tokens, 4096);
+    }
 }

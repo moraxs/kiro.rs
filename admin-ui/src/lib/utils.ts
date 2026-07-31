@@ -27,6 +27,19 @@ export function extractErrorMessage(error: unknown): string {
 }
 
 /**
+ * 超额操作失败提示：403 / 权限不足 统一提示联系组织管理员
+ * （Enterprise / 受组织策略限制的账号无法自行开启超额）
+ */
+export function overageFailureMessage(raw?: string): string {
+  const msg = (raw ?? '').trim()
+  if (!msg) return '操作失败'
+  if (/\b403\b|Forbidden|权限不足/i.test(msg)) {
+    return '请联系您的组织管理员以获取支持'
+  }
+  return msg
+}
+
+/**
  * 解析错误，返回结构化的错误信息
  */
 export function parseError(error: unknown): ParsedError {
@@ -107,6 +120,96 @@ function parseNestedErrorMessage(message: string): { title: string; detail?: str
 
 
 
+
+/**
+ * 数量语义的紧凑展示（K / M / B）。
+ *
+ * 规则：< 1000 原样输出；≥ 1000 使用 Intl 的 compact notation，最多保留 1 位小数（如 1.2K / 3.4M / 5.6B）。
+ * 仅用于"数量 / 金额 / 大小"语义；ID / 端口号 / 版本号 / 页码 / 状态码请勿使用。
+ */
+export function formatNumber(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '0'
+  if (Math.abs(value) < 1000) return String(value)
+  return new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value)
+}
+
+/**
+ * Credit 计费量展示：上游 meteringEvent.usage 是浮点（如 0.0169543），
+ * 单位为 "credit"。统一保留 3 位小数；≥ 1000 时走 K/M/B 紧凑模式（compact
+ * notation 自带 1 位小数四舍五入，例如 1,234 → "1.2K"）。
+ */
+export function formatCredits(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value) || value <= 0) return '0'
+  if (value >= 1000) {
+    return new Intl.NumberFormat('en-US', {
+      notation: 'compact',
+      maximumFractionDigits: 1,
+    }).format(value)
+  }
+  return value.toFixed(3)
+}
+
+/**
+ * 脱敏代理 URL：将 user:pass@host 中的认证信息替换为 xxx****xxx
+ */
+/** 企业 SSO (external_idp) 的 authMethod 别名，与后端 canonicalize_auth_method_value 保持一致 */
+export const EXTERNAL_IDP_ALIASES = [
+  'external_idp',
+  'azuread',
+  'azure',
+  'entra',
+  'entra-id',
+  'microsoft',
+  'm365',
+  'office365',
+  'external',
+]
+
+/**
+ * 导入路径的 authMethod 归一化，与后端 `normalize_import_auth_method` 对齐：
+ * - 命中企业 SSO 别名，或携带 `tokenEndpoint`（social/idc 均无此字段）→ `external_idp`
+ * - `clientId` + `clientSecret` → `idc`
+ * - 否则 → `social`
+ *
+ * 同时做最小必填校验：external_idp 需 `clientId` + `tokenEndpoint`；idc 需成对的
+ * clientId/clientSecret。缺失时通过 `error` 返回原因，由调用方标记该行失败并跳过。
+ */
+export function normalizeImportAuthMethod(
+  raw: string | undefined,
+  opts: { tokenEndpoint?: string; clientId?: string; clientSecret?: string },
+): { authMethod: 'social' | 'idc' | 'external_idp'; error?: string } {
+  const am = (raw || '').trim().toLowerCase()
+  const clientId = opts.clientId?.trim()
+  const clientSecret = opts.clientSecret?.trim()
+  const tokenEndpoint = opts.tokenEndpoint?.trim()
+
+  if (EXTERNAL_IDP_ALIASES.includes(am) || tokenEndpoint) {
+    if (!clientId || !tokenEndpoint) {
+      return {
+        authMethod: 'external_idp',
+        error: '企业 SSO (external_idp) 需要 clientId 和 tokenEndpoint',
+      }
+    }
+    return { authMethod: 'external_idp' }
+  }
+  if (clientId && clientSecret) return { authMethod: 'idc' }
+  if (clientId || clientSecret) {
+    return { authMethod: 'social', error: 'idc 模式需要同时提供 clientId 和 clientSecret' }
+  }
+  return { authMethod: 'social' }
+}
+
+export function maskProxyUrl(url: string): string {
+  const match = url.match(/^(\w+:\/\/)([^:@]+):([^@]+)@(.+)$/)
+  if (!match) return url
+  const [, scheme, user, pass, host] = match
+  const mask = (s: string) =>
+    s.length <= 6 ? '****' : `${s.slice(0, 3)}****${s.slice(-3)}`
+  return `${scheme}${mask(user)}:${mask(pass)}@${host}`
+}
 
 /**
  * 计算字符串的 SHA-256 哈希（十六进制）
@@ -196,3 +299,29 @@ function sha256Pure(data: Uint8Array): string {
     .map(v => (v >>> 0).toString(16).padStart(8, '0'))
     .join('')
 }
+
+/**
+ * 生成一个加密强度的随机 API Key
+ *
+ * 默认 32 字符随机部分（仅大小写字母 + 数字，~190 bit 熵），加上 `sk-kiro-` 前缀；
+ * 不使用 `-` / `_`，避免与前缀里的连字符相邻产生 `--`。
+ * 强依赖 `crypto.getRandomValues`，缺失时直接抛错，不做任何弱熵 fallback。
+ */
+export function generateApiKey(prefix: string = 'sk-kiro-', randomLen: number = 32): string {
+  if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') {
+    throw new Error('crypto.getRandomValues 不可用，无法安全生成 API Key')
+  }
+  const ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  // 用拒绝采样把字节均匀映射到 62 字符表，避免取模偏置（248 = 4 * 62）
+  let out = ''
+  const buf = new Uint8Array(randomLen)
+  while (out.length < randomLen) {
+    crypto.getRandomValues(buf)
+    for (let i = 0; i < buf.length && out.length < randomLen; i++) {
+      const b = buf[i]
+      if (b < 248) out += ALPHABET[b % ALPHABET.length]
+    }
+  }
+  return prefix + out
+}
+

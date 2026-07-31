@@ -12,7 +12,7 @@ use axum::{
 use bytes::Bytes;
 use futures::{Stream, stream};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::stream::SseEvent;
@@ -102,13 +102,31 @@ pub struct WebSearchResult {
     pub public_domain: Option<bool>,
 }
 
+fn is_native_web_search_tool(t: &crate::anthropic::types::Tool) -> bool {
+    t.name == "web_search"
+        && t.tool_type
+            .as_deref()
+            .is_some_and(|typ| typ.starts_with("web_search_"))
+}
+
 /// 检查请求是否为纯 WebSearch 请求
 ///
-/// 条件：tools 有且只有一个，且 name 为 web_search
+/// 条件：tools 有且只有一个，且为 Anthropic 原生 web_search 工具。
 pub fn has_web_search_tool(req: &MessagesRequest) -> bool {
     req.tools.as_ref().is_some_and(|tools| {
-        tools.len() == 1 && tools.first().is_some_and(|t| t.name == "web_search")
+        tools.len() == 1 && tools.first().is_some_and(is_native_web_search_tool)
     })
+}
+
+/// Checks whether the request is a "mixed-tools set that contains web_search" case
+///
+/// Mutually exclusive with [`has_web_search_tool`]: that one is the pure single-tool fast path, while this one detects
+/// the case where native web_search coexists with other tools (exec, etc.) - such a request falls onto the normal chat
+/// path, where the upstream may return a tool_use with name=web_search, requiring the internal agentic loop.
+pub(crate) fn has_web_search_among_tools(req: &MessagesRequest) -> bool {
+    req.tools
+        .as_ref()
+        .is_some_and(|tools| tools.len() > 1 && tools.iter().any(is_native_web_search_tool))
 }
 
 /// 从消息中提取搜索查询
@@ -329,27 +347,7 @@ fn generate_websearch_events(
 
     // 5. content_block_start (web_search_tool_result, index 2)
     // 官方 API 的 web_search_tool_result 没有 tool_use_id 字段
-    let search_content = if let Some(ref results) = search_results {
-        results
-            .results
-            .iter()
-            .map(|r| {
-                let page_age = r.published_date.and_then(|ms| {
-                    chrono::DateTime::from_timestamp_millis(ms)
-                        .map(|dt| dt.format("%B %-d, %Y").to_string())
-                });
-                json!({
-                    "type": "web_search_result",
-                    "title": r.title,
-                    "url": r.url,
-                    "encrypted_content": r.snippet.clone().unwrap_or_default(),
-                    "page_age": page_age
-                })
-            })
-            .collect::<Vec<_>>()
-    } else {
-        vec![]
-    };
+    let search_content = websearch_result_content(&search_results);
 
     events.push(SseEvent::new(
         "content_block_start",
@@ -445,7 +443,7 @@ fn generate_websearch_events(
 }
 
 /// 生成搜索结果摘要
-fn generate_search_summary(query: &str, results: &Option<WebSearchResults>) -> String {
+pub(crate) fn generate_search_summary(query: &str, results: &Option<WebSearchResults>) -> String {
     let mut summary = format!("Here are the search results for \"{}\":\n\n", query);
 
     if let Some(results) = results {
@@ -470,11 +468,97 @@ fn generate_search_summary(query: &str, results: &Option<WebSearchResults>) -> S
     summary
 }
 
+fn websearch_result_content(search_results: &Option<WebSearchResults>) -> Vec<Value> {
+    search_results
+        .as_ref()
+        .map(|results| {
+            results
+                .results
+                .iter()
+                .map(|result| {
+                    let page_age = result.published_date.and_then(|ms| {
+                        chrono::DateTime::from_timestamp_millis(ms)
+                            .map(|dt| dt.format("%B %-d, %Y").to_string())
+                    });
+                    json!({
+                        "type": "web_search_result",
+                        "title": result.title,
+                        "url": result.url,
+                        "encrypted_content": result.snippet.clone().unwrap_or_default(),
+                        "page_age": page_age
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn build_websearch_content(
+    query: &str,
+    tool_use_id: &str,
+    search_results: &Option<WebSearchResults>,
+) -> Vec<Value> {
+    vec![
+        json!({"type": "text", "text": format!("I'll search for \"{}\".", query)}),
+        json!({
+            "id": tool_use_id,
+            "type": "server_tool_use",
+            "name": "web_search",
+            "input": {"query": query}
+        }),
+        json!({
+            "type": "web_search_tool_result",
+            "content": websearch_result_content(search_results)
+        }),
+        json!({"type": "text", "text": generate_search_summary(query, search_results)}),
+    ]
+}
+
+fn finish_mcp_call(
+    result: anyhow::Result<McpResponse>,
+) -> Result<Option<WebSearchResults>, Response> {
+    match result {
+        Ok(response) => Ok(parse_search_results(&response)),
+        Err(error) => {
+            tracing::warn!("MCP API 调用失败: {}", error);
+            Err(super::handlers::map_provider_error(error))
+        }
+    }
+}
+
+fn render_websearch_response(
+    stream_response: bool,
+    model: String,
+    query: String,
+    tool_use_id: String,
+    search_results: Option<WebSearchResults>,
+    input_tokens: i32,
+) -> Response {
+    if stream_response {
+        let stream =
+            create_websearch_sse_stream(model, query, tool_use_id, search_results, input_tokens);
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .header(header::CACHE_CONTROL, "no-cache")
+            .header(header::CONNECTION, "keep-alive")
+            .body(Body::from_stream(stream))
+            .unwrap()
+    } else {
+        let content = build_websearch_content(&query, &tool_use_id, &search_results);
+        let summary = generate_search_summary(&query, &search_results);
+        let output_tokens = (summary.len() as i32 + 3) / 4;
+        // 本地 WebSearch 不走上游，不会收到 meteringEvent，因此也不带 credit_* 字段。
+        super::websearch_loop::render_json(&model, content, "end_turn", input_tokens, output_tokens, "", None)
+    }
+}
+
 /// 处理 WebSearch 请求
 pub async fn handle_websearch_request(
     provider: std::sync::Arc<crate::kiro::provider::KiroProvider>,
     payload: &MessagesRequest,
     input_tokens: i32,
+    group: Option<&str>,
 ) -> Response {
     // 1. 提取搜索查询
     let query = match extract_search_query(payload) {
@@ -497,38 +581,33 @@ pub async fn handle_websearch_request(
     let (tool_use_id, mcp_request) = create_mcp_request(&query);
 
     // 3. 调用 Kiro MCP API
-    let search_results = match call_mcp_api(&provider, &mcp_request).await {
-        Ok(response) => parse_search_results(&response),
-        Err(e) => {
-            tracing::warn!("MCP API 调用失败: {}", e);
-            None
-        }
+    let search_results = match finish_mcp_call(call_mcp_api(&provider, &mcp_request, group).await) {
+        Ok(results) => results,
+        Err(response) => return response,
     };
 
-    // 4. 生成 SSE 响应
-    let model = payload.model.clone();
-    let stream =
-        create_websearch_sse_stream(model, query, tool_use_id, search_results, input_tokens);
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .header(header::CONNECTION, "keep-alive")
-        .body(Body::from_stream(stream))
-        .unwrap()
+    // 4. 按请求模式生成响应
+    render_websearch_response(
+        payload.stream,
+        payload.model.clone(),
+        query,
+        tool_use_id,
+        search_results,
+        input_tokens,
+    )
 }
 
 /// 调用 Kiro MCP API
-async fn call_mcp_api(
+pub(crate) async fn call_mcp_api(
     provider: &crate::kiro::provider::KiroProvider,
     request: &McpRequest,
+    group: Option<&str>,
 ) -> anyhow::Result<McpResponse> {
     let request_body = serde_json::to_string(request)?;
 
     tracing::debug!("MCP request: {}", request_body);
 
-    let response = provider.call_mcp(&request_body).await?;
+    let response = provider.call_mcp(&request_body, group).await?;
 
     let body = response.text().await?;
     tracing::debug!("MCP response: {}", body);
@@ -551,6 +630,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_mcp_rate_limit_is_not_converted_to_empty_results() {
+        let error = crate::kiro::error::UpstreamRateLimitError::new(Some("60".to_string()));
+        let response = finish_mcp_call(Err(error.into())).unwrap_err();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "60");
+    }
+
+    #[tokio::test]
+    async fn test_non_stream_websearch_response_is_json() {
+        let response = render_websearch_response(
+            false,
+            "claude-sonnet-4".to_string(),
+            "rust".to_string(),
+            "srvtoolu_test".to_string(),
+            None,
+            12,
+        );
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["type"], "message");
+        assert_eq!(body["stop_reason"], "end_turn");
+        assert!(
+            body["content"].as_array().unwrap().iter().any(|block| {
+                block["type"] == "server_tool_use" && block["name"] == "web_search"
+            })
+        );
+    }
+
+    #[test]
     fn test_has_web_search_tool_only_one() {
         use crate::anthropic::types::{Message, Tool};
 
@@ -569,6 +686,7 @@ mod tests {
                 description: String::new(),
                 input_schema: Default::default(),
                 max_uses: Some(8),
+                cache_control: None,
             }]),
             tool_choice: None,
             thinking: None,
@@ -599,6 +717,7 @@ mod tests {
                     description: String::new(),
                     input_schema: Default::default(),
                     max_uses: Some(8),
+                    cache_control: None,
                 },
                 Tool {
                     tool_type: None,
@@ -606,6 +725,7 @@ mod tests {
                     description: "Other tool".to_string(),
                     input_schema: Default::default(),
                     max_uses: None,
+                    cache_control: None,
                 },
             ]),
             tool_choice: None,
@@ -616,6 +736,50 @@ mod tests {
 
         // 多个工具时不应该被识别为纯 websearch 请求
         assert!(!has_web_search_tool(&req));
+        assert!(has_web_search_among_tools(&req));
+    }
+
+    #[test]
+    fn test_regular_tool_named_web_search_does_not_trigger_native_websearch() {
+        use crate::anthropic::types::{Message, Tool};
+
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 1024,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: serde_json::json!("test"),
+            }],
+            stream: true,
+            system: None,
+            tools: Some(vec![
+                Tool {
+                    tool_type: None,
+                    name: "web_search".to_string(),
+                    description: "Regular client-side search tool".to_string(),
+                    input_schema: Default::default(),
+                    max_uses: None,
+                    cache_control: None,
+                },
+                Tool {
+                    tool_type: None,
+                    name: "other_tool".to_string(),
+                    description: "Other tool".to_string(),
+                    input_schema: Default::default(),
+                    max_uses: None,
+                    cache_control: None,
+                },
+            ]),
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        // A regular client-defined tool can be named web_search, but only
+        // Anthropic's native web search tool has type=web_search_*.
+        assert!(!has_web_search_tool(&req));
+        assert!(!has_web_search_among_tools(&req));
     }
 
     #[test]
